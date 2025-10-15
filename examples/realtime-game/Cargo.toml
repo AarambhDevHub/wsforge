@@ -1,0 +1,12 @@
+[package]
+name = "realtime-game-example"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wsforge = { path = "../../wsforge" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>WsForge Chat</title>
+        <link rel="stylesheet" href="style.css" />
+        <link
+            rel="icon"
+            href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔥</text></svg>"
+        />
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <h1>🔥 WsForge Chat</h1>
+                <div class="stats">
+                    <span id="status" class="status disconnected"
+                        >Disconnected</span
+                    >
+                    <span id="userCount" class="user-count">0 users</span>
+                </div>
+            </header>
+
+            <div class="chat-container">
+                <div id="messages" class="messages"></div>
+
+                <div class="input-container">
+                    <input
+                        type="text"
+                        id="usernameInput"
+                        placeholder="Your name..."
+                        maxlength="20"
+                        autocomplete="off"
+                    />
+                    <input
+                        type="text"
+                        id="messageInput"
+                        placeholder="Type a message..."
+                        disabled
+                        autocomplete="off"
+                    />
+                    <button id="sendButton" type="button" disabled>Send</button>
+                </div>
+            </div>
+
+            <footer>
+                <p>
+                    Built with ❤️ using WsForge - High-Performance WebSocket
+                    Framework
+                </p>
+            </footer>
+        </div>
+
+        <script src="app.js"></script>
+    </body>
+</html>

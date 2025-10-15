@@ -1,0 +1,16 @@
+[package]
+name = "wsforge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wsforge-core = { path = "../wsforge-core" }
+wsforge-macros = { path = "../wsforge-macros", optional = true }
+
+[features]
+default = ["macros"]
+macros = ["wsforge-macros"]
+full = ["macros"]

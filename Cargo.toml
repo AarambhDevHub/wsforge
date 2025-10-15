@@ -1,0 +1,22 @@
+[workspace]
+members = ["examples/chat", "examples/chat-web", "examples/echo", "examples/realtime-game","wsforge","wsforge-core", "wsforge-macros"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+repository = "https://github.com/yourusername/wsforge"
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dashmap = "6.1"
+async-trait = "0.1"
+thiserror = "1.0"
+tracing = "0.1"
+bytes = "1.7"

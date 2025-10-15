@@ -1,0 +1,24 @@
+[package]
+name = "wsforge-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+tungstenite = "0.24"
+http = "1.1"
+pin-project-lite = "0.2"
+mime_guess = "2.0"
+percent-encoding = "2.3"

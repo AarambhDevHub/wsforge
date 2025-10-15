@@ -1,0 +1,12 @@
+[package]
+name = "chat-example"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wsforge = { path = "../../wsforge" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
