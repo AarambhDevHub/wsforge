@@ -45,7 +45,7 @@ serde_json = "1.0"
 
 ### Echo Server Example
 
-```
+```rust
 use wsforge::prelude::*;
 
 async fn echo(msg: Message) -> Result<Message> {
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
 
 ### Chat Server Example
 
-```
+```rust
 use wsforge::prelude::*;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
@@ -186,7 +186,7 @@ cargo run --example realtime-game
 
 Handlers are async functions that process WebSocket messages:
 
-```
+```rust
 // Simple handler
 async fn simple() -> Result<String> {
     Ok("Hello!".to_string())
@@ -219,7 +219,7 @@ Type-safe data extraction from messages and context:
 
 Send messages to multiple connections efficiently:
 
-```
+```rust
 // Broadcast to all
 manager.broadcast(msg);
 

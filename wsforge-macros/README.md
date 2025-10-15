@@ -12,7 +12,7 @@ This crate provides compile-time code generation macros that reduce boilerplate 
 
 Transform async functions into WebSocket handlers.
 
-```
+```rust
 use wsforge_macros::websocket_handler;
 
 #[websocket_handler]
@@ -25,7 +25,7 @@ async fn my_handler(msg: Message) -> Result<String> {
 
 Auto-implement message conversion methods.
 
-```
+```rust
 use wsforge_macros::WebSocketMessage;
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +44,7 @@ struct ChatMessage {
 
 Implement the Handler trait for custom types.
 
-```
+```rust
 use wsforge_macros::WebSocketHandler;
 
 #[derive(WebSocketHandler)]
@@ -67,7 +67,7 @@ impl MyHandler {
 
 Create a new Router instance.
 
-```
+```rust
 use wsforge_macros::routes;
 
 let router = routes!()

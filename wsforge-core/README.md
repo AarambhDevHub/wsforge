@@ -28,7 +28,7 @@ wsforge-core = "0.1.0"
 tokio = { version = "1.40", features = ["full"] }
 ```
 
-```
+```rust
 use wsforge_core::prelude::*;
 
 async fn echo(msg: Message) -> Result<Message> {
