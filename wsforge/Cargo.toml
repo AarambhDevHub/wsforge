@@ -13,8 +13,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-wsforge-core = { path = "../wsforge-core" }
-wsforge-macros = { path = "../wsforge-macros", optional = true }
+wsforge-core = { path = "../wsforge-core", version = "0.1.0" }
+wsforge-macros = { path = "../wsforge-macros", optional = true, version = "0.1.0" }
 
 [features]
 default = ["macros"]
