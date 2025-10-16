@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use wsforge::prelude::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -16,7 +15,7 @@ struct StatsMessage {
     count: usize,
 }
 
-async fn chat_handler(msg: Message, State(manager): State<Arc<ConnectionManager>>) -> Result<()> {
+async fn chat_handler(msg: Message, State(manager): State<ConnectionManager>) -> Result<()> {
     if let Ok(chat_msg) = msg.json::<ChatMessage>() {
         println!(
             "💬 {} says: {} [Broadcasting to {} users]",
