@@ -3,7 +3,7 @@ members = ["examples/chat", "examples/chat-web", "examples/echo", "examples/real
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Aarambh Dev Hub <darshanvichhi111@gmail.com>"]
 description = "Core library for WsForge WebSocket framework"

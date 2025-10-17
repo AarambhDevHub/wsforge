@@ -476,13 +476,13 @@ macro_rules! impl_handler {
         {
             async fn call(
                 &self,
-                message: Message,
-                conn: Connection,
-                state: AppState,
-                extensions: Extensions,
+                _message: Message,
+                _conn: Connection,
+                _state: AppState,
+                _extensions: Extensions,
             ) -> Result<Option<Message>> {
                 $(
-                    let $ty = $ty::from_message(&message, &conn, &state, &extensions).await?;
+                    let $ty = $ty::from_message(&_message, &_conn, &_state, &_extensions).await?;
                 )*
 
                 let response = (self.handler)($($ty,)*).await;
