@@ -1,15 +1,16 @@
-//! Routing and server management for WebSocket connections.
+//! Routing and server management for WebSocket connections with middleware support.
 //!
 //! This module provides the core routing infrastructure for WsForge, allowing you to
-//! define handlers for different message patterns, manage application state, and configure
-//! server behavior. The router handles both WebSocket connections and static file serving
-//! on the same port.
+//! define handlers for different message patterns, manage application state, add middleware
+//! layers, and configure server behavior. The router handles both WebSocket connections
+//! and static file serving on the same port.
 //!
 //! # Overview
 //!
 //! The [`Router`] is the main entry point for building a WebSocket server. It provides
 //! a builder-style API for:
 //! - Registering message handlers for specific routes
+//! - Adding global and per-route middleware layers
 //! - Managing shared application state
 //! - Serving static files (HTML, CSS, JS)
 //! - Configuring connection lifecycle callbacks
@@ -28,10 +29,22 @@
 //!                                    │
 //!                                    ├──→ on_connect callback
 //!                                    │
-//!                                    ├──→ Message Router → Handler
+//!                                    ├──→ Global Middleware Chain
+//!                                    │    ├──→ Middleware 1
+//!                                    │    ├──→ Middleware 2
+//!                                    │    └──→ Route-Specific Middleware
+//!                                    │         └──→ Handler
 //!                                    │
 //!                                    └──→ on_disconnect callback
 //! ```
+//!
+//! # Middleware System
+//!
+//! WsForge supports a powerful middleware system with two types:
+//! - **Global middleware**: Applied to all routes
+//! - **Per-route middleware**: Applied only to specific routes
+//!
+//! Middleware execute in order: global first, then per-route, then the handler.
 //!
 //! # Examples
 //!
@@ -53,7 +66,7 @@
 //! # }
 //! ```
 //!
-//! ## Multiple Routes
+//! ## With Global Middleware
 //!
 //! ```
 //! use wsforge::prelude::*;
@@ -62,20 +75,46 @@
 //!     Ok(msg)
 //! }
 //!
-//! async fn stats(State(manager): State<Arc<ConnectionManager>>) -> Result<String> {
-//!     Ok(format!("Active connections: {}", manager.count()))
-//! }
-//!
 //! # async fn example() -> Result<()> {
-//! # use std::sync::Arc;
 //! let router = Router::new()
-//!     .route("/echo", handler(echo))
-//!     .route("/stats", handler(stats))
+//!     .layer(LoggerMiddleware::new())  // Logs all messages
 //!     .default_handler(handler(echo));
 //!
 //! router.listen("127.0.0.1:8080").await?;
 //! # Ok(())
 //! # }
+//! ```
+//!
+//! ## Multiple Routes with Per-Route Middleware
+//!
+//! ```
+//! use wsforge::prelude::*;
+//!
+//! async fn public_handler(msg: Message) -> Result<String> {
+//!     Ok("Public response".to_string())
+//! }
+//!
+//! async fn admin_handler(msg: Message) -> Result<String> {
+//!     Ok("Admin response".to_string())
+//! }
+//!
+//! # async fn example() -> Result<()> {
+//! # use std::sync::Arc;
+//! let router = Router::new()
+//!     // Public route - no auth needed
+//!     .route("/public", handler(public_handler))
+//!
+//!     // Admin route - with auth middleware
+//!     .route_with_layers(
+//!         "/admin",
+//!         vec![auth_middleware()],
+//!         handler(admin_handler)
+//!     );
+//!
+//! router.listen("127.0.0.1:8080").await?;
+//! # Ok(())
+//! # }
+//! # fn auth_middleware() -> Arc<dyn Middleware> { unimplemented!() }
 //! ```
 //!
 //! ## With State and Callbacks
@@ -91,6 +130,7 @@
 //!
 //! # async fn example() -> Result<()> {
 //! let router = Router::new()
+//!     .layer(LoggerMiddleware::new())
 //!     .default_handler(handler(broadcast))
 //!     .on_connect(|manager, conn_id| {
 //!         println!("✅ User {} connected (Total: {})", conn_id, manager.count());
@@ -103,32 +143,13 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! ## Hybrid HTTP/WebSocket Server
-//!
-//! ```
-//! use wsforge::prelude::*;
-//!
-//! async fn ws_handler(msg: Message) -> Result<Message> {
-//!     Ok(msg)
-//! }
-//!
-//! # async fn example() -> Result<()> {
-//! let router = Router::new()
-//!     .serve_static("public")  // Serve HTML/CSS/JS from 'public' folder
-//!     .default_handler(handler(ws_handler));
-//!
-//! // Handles both HTTP (for files) and WebSocket on same port
-//! router.listen("127.0.0.1:8080").await?;
-//! # Ok(())
-//! # }
-//! ```
 
 use crate::connection::{ConnectionId, ConnectionManager, handle_websocket};
 use crate::error::{Error, Result};
 use crate::extractor::Extensions;
 use crate::handler::Handler;
 use crate::message::Message;
+use crate::middleware::{Middleware, MiddlewareChain};
 use crate::state::AppState;
 use dashmap::DashMap;
 use std::net::SocketAddr;
@@ -138,10 +159,10 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::accept_async;
 use tracing::{error, info};
 
-/// Represents a single route with its path and handler.
+/// Represents a single route with its path and middleware chain.
 ///
-/// Routes map message patterns (paths) to handler functions.
-/// This is typically used internally by the [`Router`].
+/// Routes map message patterns (paths) to handler functions with optional
+/// middleware layers. This is typically used internally by the [`Router`].
 ///
 /// # Examples
 ///
@@ -153,36 +174,40 @@ use tracing::{error, info};
 /// }
 ///
 /// # fn example() {
+/// let mut chain = MiddlewareChain::new();
+/// chain.handler(handler(my_handler));
+///
 /// let route = Route {
 ///     path: "/api/message".to_string(),
-///     handler: handler(my_handler),
+///     chain: Arc::new(chain),
 /// };
 /// # }
 /// ```
 pub struct Route {
     /// The route path (e.g., "/chat", "/api/users")
     pub path: String,
-    /// The handler for this route
-    pub handler: Arc<dyn Handler>,
+    /// The middleware chain and handler for this route
+    pub chain: Arc<MiddlewareChain>,
 }
 
-/// The main router for WebSocket servers.
+/// The main router for WebSocket servers with middleware support.
 ///
-/// `Router` is the central component that manages routing, state, connections,
-/// and server lifecycle. It uses a builder pattern for configuration and
-/// supports both WebSocket and HTTP static file serving on the same port.
+/// `Router` is the central component that manages routing, middleware, state, connections,
+/// and server lifecycle. It uses a builder pattern for configuration and supports both
+/// WebSocket and HTTP static file serving on the same port.
+///
+/// # Middleware System
+///
+/// The router supports two types of middleware:
+/// - **Global middleware** (added with [`layer()`](Self::layer)) - Applied to all routes
+/// - **Per-route middleware** (added with [`route_with_layers()`](Self::route_with_layers)) - Applied to specific routes
+///
+/// Execution order: Global middleware → Per-route middleware → Handler
 ///
 /// # Thread Safety
 ///
 /// Router is thread-safe and can be cloned cheaply (uses `Arc` internally).
 /// All connections share the same router instance.
-///
-/// # Lifecycle
-///
-/// 1. Create router with `Router::new()`
-/// 2. Configure routes, state, handlers, callbacks
-/// 3. Call `listen()` to start the server
-/// 4. Router handles incoming connections automatically
 ///
 /// # Examples
 ///
@@ -204,45 +229,44 @@ pub struct Route {
 /// # }
 /// ```
 ///
-/// ## With Shared State
+/// ## With Middleware Layers
 ///
 /// ```
 /// use wsforge::prelude::*;
-/// use std::sync::Arc;
 ///
-/// struct AppConfig {
-///     max_connections: usize,
-/// }
-///
-/// async fn handler(State(config): State<Arc<AppConfig>>) -> Result<String> {
-///     Ok(format!("Max connections: {}", config.max_connections))
-/// }
-///
+/// # async fn handler(msg: Message) -> Result<String> { Ok("".to_string()) }
 /// # async fn example() -> Result<()> {
-/// let config = Arc::new(AppConfig { max_connections: 100 });
-///
 /// let router = Router::new()
-///     .with_state(config)
-///     .default_handler(handler(handler));
+///     .layer(LoggerMiddleware::new())           // Global: logs all
+///     .layer(auth_middleware())                  // Global: auth all
+///     .route("/public", handler(handler))        // No extra middleware
+///     .route_with_layers(
+///         "/admin",
+///         vec![admin_only_middleware()],         // Per-route: admin only
+///         handler(handler)
+///     );
 ///
 /// router.listen("127.0.0.1:8080").await?;
 /// # Ok(())
 /// # }
+/// # fn auth_middleware() -> Arc<dyn Middleware> { unimplemented!() }
+/// # fn admin_only_middleware() -> Arc<dyn Middleware> { unimplemented!() }
 /// ```
 pub struct Router {
-    routes: Arc<DashMap<String, Arc<dyn Handler>>>,
+    routes: Arc<DashMap<String, Arc<MiddlewareChain>>>,
+    global_middlewares: Vec<Arc<dyn Middleware>>,
     state: AppState,
     connection_manager: Arc<ConnectionManager>,
     on_connect: Option<Arc<dyn Fn(&Arc<ConnectionManager>, ConnectionId) + Send + Sync>>,
     on_disconnect: Option<Arc<dyn Fn(&Arc<ConnectionManager>, ConnectionId) + Send + Sync>>,
-    default_handler: Option<Arc<dyn Handler>>,
+    default_chain: Option<Arc<MiddlewareChain>>,
     static_handler: Option<crate::static_files::StaticFileHandler>,
 }
 
 impl Router {
     /// Creates a new empty router.
     ///
-    /// The router starts with no routes, no state, and no handlers.
+    /// The router starts with no routes, no middleware, no state, and no handlers.
     /// Use the builder methods to configure it.
     ///
     /// # Examples
@@ -255,16 +279,61 @@ impl Router {
     pub fn new() -> Self {
         Self {
             routes: Arc::new(DashMap::new()),
+            global_middlewares: Vec::new(),
             state: AppState::new(),
             connection_manager: Arc::new(ConnectionManager::new()),
             on_connect: None,
             on_disconnect: None,
-            default_handler: None,
+            default_chain: None,
             static_handler: None,
         }
     }
 
-    /// Registers a handler for a specific route.
+    /// Add a global middleware layer that applies to all routes.
+    ///
+    /// Global middleware are executed before per-route middleware and handlers.
+    /// They are executed in the order they are added.
+    ///
+    /// # Arguments
+    ///
+    /// * `middleware` - The middleware to add
+    ///
+    /// # Examples
+    ///
+    /// ## Single Middleware
+    ///
+    /// ```
+    /// use wsforge::prelude::*;
+    ///
+    /// # fn example() {
+    /// let router = Router::new()
+    ///     .layer(LoggerMiddleware::new());
+    /// # }
+    /// ```
+    ///
+    /// ## Multiple Middleware
+    ///
+    /// ```
+    /// use wsforge::prelude::*;
+    ///
+    /// # fn example() {
+    /// let router = Router::new()
+    ///     .layer(LoggerMiddleware::new())        // First: logging
+    ///     .layer(auth_middleware())               // Second: authentication
+    ///     .layer(rate_limit_middleware());        // Third: rate limiting
+    /// # }
+    /// # fn auth_middleware() -> Arc<dyn Middleware> { unimplemented!() }
+    /// # fn rate_limit_middleware() -> Arc<dyn Middleware> { unimplemented!() }
+    /// ```
+    pub fn layer(mut self, middleware: Arc<dyn Middleware>) -> Self {
+        self.global_middlewares.push(middleware);
+        self
+    }
+
+    /// Registers a handler for a specific route without additional middleware.
+    ///
+    /// Global middleware will still apply to this route. For route-specific middleware,
+    /// use [`route_with_layers()`](Self::route_with_layers).
     ///
     /// Routes are matched against the beginning of incoming messages.
     /// For example, a message like `/chat hello` would match route `/chat`.
@@ -294,7 +363,100 @@ impl Router {
     /// # }
     /// ```
     pub fn route(self, path: impl Into<String>, handler: Arc<dyn Handler>) -> Self {
-        self.routes.insert(path.into(), handler);
+        let mut chain = MiddlewareChain::new();
+
+        // Add global middlewares first
+        for middleware in &self.global_middlewares {
+            chain = chain.layer(middleware.clone());
+        }
+
+        // Add handler
+        chain = chain.handler(handler);
+
+        self.routes.insert(path.into(), Arc::new(chain));
+        self
+    }
+
+    // Add a route with per-route middleware layers.
+    ///
+    /// Per-route middleware are executed after global middleware but before the handler.
+    /// This is useful for route-specific concerns like authorization or validation.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The route path (e.g., "/admin", "/api/users")
+    /// * `layers` - Vector of middleware to apply to this route
+    /// * `handler` - The handler function wrapped with `handler()`
+    ///
+    /// # Examples
+    ///
+    /// ## Admin Route with Auth
+    ///
+    /// ```
+    /// use wsforge::prelude::*;
+    ///
+    /// async fn admin_handler(msg: Message) -> Result<String> {
+    ///     Ok("Admin panel".to_string())
+    /// }
+    ///
+    /// # fn example() {
+    /// # use std::sync::Arc;
+    /// let router = Router::new()
+    ///     .route_with_layers(
+    ///         "/admin",
+    ///         vec![
+    ///             auth_middleware(),
+    ///             admin_check_middleware(),
+    ///         ],
+    ///         handler(admin_handler)
+    ///     );
+    /// # }
+    /// # fn auth_middleware() -> Arc<dyn Middleware> { unimplemented!() }
+    /// # fn admin_check_middleware() -> Arc<dyn Middleware> { unimplemented!() }
+    /// ```
+    ///
+    /// ## API Route with Validation
+    ///
+    /// ```
+    /// use wsforge::prelude::*;
+    ///
+    /// async fn api_handler(msg: Message) -> Result<String> {
+    ///     Ok("API response".to_string())
+    /// }
+    ///
+    /// # fn example() {
+    /// # use std::sync::Arc;
+    /// let router = Router::new()
+    ///     .route_with_layers(
+    ///         "/api/users",
+    ///         vec![validate_json_middleware()],
+    ///         handler(api_handler)
+    ///     );
+    /// # }
+    /// # fn validate_json_middleware() -> Arc<dyn Middleware> { unimplemented!() }
+    /// ```
+    pub fn route_with_layers(
+        self,
+        path: impl Into<String>,
+        layers: Vec<Arc<dyn Middleware>>,
+        handler: Arc<dyn Handler>,
+    ) -> Self {
+        let mut chain = MiddlewareChain::new();
+
+        // Add global middlewares first
+        for middleware in &self.global_middlewares {
+            chain = chain.layer(middleware.clone());
+        }
+
+        // Add route-specific middlewares
+        for middleware in layers {
+            chain = chain.layer(middleware);
+        }
+
+        // Add handler
+        chain = chain.handler(handler);
+
+        self.routes.insert(path.into(), Arc::new(chain));
         self
     }
 
@@ -311,7 +473,7 @@ impl Router {
     ///
     /// # Arguments
     ///
-    /// * `data` - The state data to share
+    /// * `data` - The state data to share (wrapped in `Arc`)
     ///
     /// # Examples
     ///
@@ -473,7 +635,7 @@ impl Router {
     /// Sets the default handler for messages that don't match any route.
     ///
     /// This handler is called when no route matches the incoming message.
-    /// Use this for catch-all behavior or when you don't need routing.
+    /// Global middleware will still be applied to the default handler.
     ///
     /// # Arguments
     ///
@@ -512,7 +674,15 @@ impl Router {
     /// # }
     /// ```
     pub fn default_handler(mut self, handler: Arc<dyn Handler>) -> Self {
-        self.default_handler = Some(handler);
+        let mut chain = MiddlewareChain::new();
+
+        // Add global middlewares to default handler too
+        for middleware in &self.global_middlewares {
+            chain = chain.layer(middleware.clone());
+        }
+
+        chain = chain.handler(handler);
+        self.default_chain = Some(Arc::new(chain));
         self
     }
 
@@ -558,24 +728,6 @@ impl Router {
     /// // ws://localhost:8080             -> WebSocket handler
     /// # }
     /// ```
-    ///
-    /// ## Web Chat Application
-    ///
-    /// ```
-    /// use wsforge::prelude::*;
-    ///
-    /// async fn chat_handler(msg: Message, State(manager): State<Arc<ConnectionManager>>) -> Result<()> {
-    ///     manager.broadcast(msg);
-    ///     Ok(())
-    /// }
-    ///
-    /// # fn example() {
-    /// # use std::sync::Arc;
-    /// let router = Router::new()
-    ///     .serve_static("chat-ui")  // HTML/CSS/JS for chat interface
-    ///     .default_handler(handler(chat_handler));
-    /// # }
-    /// ```
     pub fn serve_static(mut self, path: impl Into<PathBuf>) -> Self {
         self.static_handler = Some(crate::static_files::StaticFileHandler::new(path.into()));
         self
@@ -607,6 +759,10 @@ impl Router {
     ///
     /// This method consumes the router and starts the server loop. It will
     /// run indefinitely until the process is terminated or an error occurs.
+    ///
+    /// The connection manager is automatically inserted into the router's state
+    /// before the server starts, making it available to all handlers via the
+    /// `State<Arc<ConnectionManager>>` extractor.
     ///
     /// # Arguments
     ///
@@ -644,28 +800,12 @@ impl Router {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// ## With Error Handling
-    ///
-    /// ```
-    /// use wsforge::prelude::*;
-    ///
-    /// # async fn example() {
-    /// let router = Router::new();
-    ///
-    /// match router.listen("127.0.0.1:8080").await {
-    ///     Ok(_) => println!("Server stopped"),
-    ///     Err(e) => eprintln!("Server error: {}", e),
-    /// }
-    /// # }
-    /// ```
     pub async fn listen(self, addr: impl AsRef<str>) -> Result<()> {
         let addr: SocketAddr = addr
             .as_ref()
             .parse()
             .map_err(|e| Error::custom(format!("Invalid address: {}", e)))?;
 
-        // Insert connection manager into state BEFORE wrapping in Arc
         self.state.insert(self.connection_manager.clone());
 
         let listener = TcpListener::bind(addr).await?;
@@ -818,12 +958,12 @@ impl Router {
 
         let extensions = Extensions::new();
 
-        let handler = if let Some(text) = message.as_text() {
+        let chain = if let Some(text) = message.as_text() {
             if text.starts_with('/') {
                 if let Some((route, _)) = text.split_once(' ') {
-                    self.routes.get(route).map(|h| h.value().clone())
+                    self.routes.get(route).map(|c| c.value().clone())
                 } else {
-                    self.routes.get(text).map(|h| h.value().clone())
+                    self.routes.get(text).map(|c| c.value().clone())
                 }
             } else {
                 None
@@ -832,11 +972,11 @@ impl Router {
             None
         };
 
-        let handler = handler.or_else(|| self.default_handler.clone());
+        let chain = chain.or_else(|| self.default_chain.clone());
 
-        if let Some(handler) = handler {
-            match handler
-                .call(message, conn.clone(), self.state.clone(), extensions)
+        if let Some(chain) = chain {
+            match chain
+                .execute(message, conn.clone(), self.state.clone(), extensions)
                 .await
             {
                 Ok(Some(response)) => {
@@ -869,11 +1009,12 @@ impl Clone for Router {
     fn clone(&self) -> Self {
         Self {
             routes: self.routes.clone(),
+            global_middlewares: self.global_middlewares.clone(),
             state: self.state.clone(),
             connection_manager: self.connection_manager.clone(),
             on_connect: self.on_connect.clone(),
             on_disconnect: self.on_disconnect.clone(),
-            default_handler: self.default_handler.clone(),
+            default_chain: self.default_chain.clone(),
             static_handler: self.static_handler.clone(),
         }
     }
